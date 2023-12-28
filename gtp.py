@@ -32,14 +32,17 @@ try:
         data = bytearray()
     
         while True:
-            data.extend(sock.recv(4096))
-            if len(data) == 0 or data[-2:] == b'\n\n':
-                break
             if message == b'quit\n':
                 print("quit")
                 raise ConnectionResetError
-            print('received\n {}'.format(str(data, 'utf-8')))
+            data.extend(sock.recv(4096))
+            if len(data) == 0 or data[-2:] == b'\n\n':
+                break
+        print('received\n {}'.format(str(data, 'utf-8')))
 
 except Exception as e:
     print('closing socket because: {!r}'.format(e))
+    sock.close()
+except KeyboardInterrupt as e:
+    print(e)
     sock.close()
