@@ -60,6 +60,7 @@ def send_command(connection, command: bytes) -> bytearray:
     while True:
         if command == b"quit\n":
             print("quit")
+            connection.close()
             break
         data.extend(connection.recv(4096))
         if len(data) == 0 or data[-2:] == b"\n\n":
@@ -90,30 +91,82 @@ def client(host: str, port: int):
         gtp.close()
 
 
+def handle_client(
+    client: socket.SocketType, addr: str, command: bytes
+) -> Optional[bytearray]:
+    try:
+        # Send data
+        print("sending {!r}".format(command))
+        data = send_command(client, command)
+
+        if data:
+            return data
+    except Exception as e:
+        print("connection form {} ended because {}".format(addr, e))
+        client.close()
+    return None
+
+
+def parse_move_result(input: bytearray) -> str:
+    return input.strip(b"= \n\t").decode("utf-8")
+
+
+def play(clients):
+    color, vertex = None, None
+    i = 0
+    pass_cnt = 0
+
+    while i < 300:
+        # time.sleep(0.1)
+        (client, addr) = clients[i % 2]
+        i += 1
+        if color is None and vertex is None:
+            # move first time
+            command = bytes("genmove b\n", "utf-8")
+            color = "black"
+            move_result = handle_client(client, addr, command)
+        else:
+            command = bytes("play {} {}\n".format(color, vertex), "utf-8")
+            if handle_client(client, addr, command) is None:
+                print("client {} sends no data".format(client))
+                break
+            if color == "black":
+                command = bytes("genmove w\n", "utf-8")
+                color = "white"
+            else:
+                command = bytes("genmove b\n", "utf-8")
+                color = "black"
+            move_result = handle_client(client, addr, command)
+        if move_result is not None:
+            vertex = parse_move_result(move_result)
+            if vertex == "PASS":
+                pass_cnt += 1
+            else:
+                pass_cnt = 0
+        else:
+            print("client {} sends no data".format(client))
+            break
+        data = handle_client(client, addr, b"showboard\n")
+        if data is None:
+            break
+        print("received {} bytes\n {}".format(len(data), str(data, "utf-8")))
+        if pass_cnt == 2:
+            break
+
+
 def server(host: str, port: int):
     gtp = gtp_server(host, port)
     spawn_gnugo_client(host, port)
     spawn_gnugo_client(host, port)
-    while True:
+    clients = []
+    while len(clients) != 2:
         # Wait for a connection
         client, addr = gtp.accept()
         print("connection from", addr)
-        try:
-            while True:
-                # Send data
-                message = bytes("{}\n".format(input("> ")), "utf-8")
-                print("sending {!r}".format(message))
-                data = send_command(client, message)
+        clients.append((client, addr))
 
-                if data:
-                    print(
-                        "received {} bytes\n {}".format(len(data), str(data, "utf-8"))
-                    )
-                else:
-                    break
-        finally:
-            print("connection form {} ended".format(addr))
-            client.close()
+    play(clients)
+    gtp.close()
 
 
 class PortNumber(int):
