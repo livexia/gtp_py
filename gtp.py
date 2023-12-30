@@ -52,7 +52,7 @@ def gtp_server(host: str, port: int):
     return sock
 
 
-def send_command(connection, command: bytes) -> Optional[bytearray]:
+def send_command(connection, command: bytes) -> bytearray:
     connection.send(command)
 
     data = bytearray()
@@ -60,7 +60,7 @@ def send_command(connection, command: bytes) -> Optional[bytearray]:
     while True:
         if command == b"quit\n":
             print("quit")
-            raise ConnectionResetError
+            break
         data.extend(connection.recv(4096))
         if len(data) == 0 or data[-2:] == b"\n\n":
             break
@@ -77,43 +77,43 @@ def client(host: str, port: int):
             print("sending {!r}".format(message))
             data = send_command(gtp, message)
 
-            if data is not None:
-                print("received\n {}".format(str(data, "utf-8")))
+            if data:
+                print("received {} bytes\n {}".format(len(data), str(data, "utf-8")))
             else:
                 raise
 
     except Exception as e:
         print("closing socket because: {!r}".format(e))
-        gtp.close()
     except KeyboardInterrupt as e:
         print(e)
+    finally:
         gtp.close()
 
 
 def server(host: str, port: int):
     gtp = gtp_server(host, port)
     spawn_gnugo_client(host, port)
-    try:
+    spawn_gnugo_client(host, port)
+    while True:
         # Wait for a connection
         client, addr = gtp.accept()
         print("connection from", addr)
-        while True:
-            # Send data
-            message = bytes("{}\n".format(input("> ")), "utf-8")
-            print("sending {!r}".format(message))
-            data = send_command(client, message)
+        try:
+            while True:
+                # Send data
+                message = bytes("{}\n".format(input("> ")), "utf-8")
+                print("sending {!r}".format(message))
+                data = send_command(client, message)
 
-            if data is not None:
-                print("received\n {}".format(str(data, "utf-8")))
-            else:
-                raise
-
-    except Exception as e:
-        print("closing socket because: {!r}".format(e))
-        gtp.close()
-    except KeyboardInterrupt as e:
-        print(e)
-        gtp.close()
+                if data:
+                    print(
+                        "received {} bytes\n {}".format(len(data), str(data, "utf-8"))
+                    )
+                else:
+                    break
+        finally:
+            print("connection form {} ended".format(addr))
+            client.close()
 
 
 class PortNumber(int):
