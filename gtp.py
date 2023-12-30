@@ -121,7 +121,6 @@ def play(clients):
 
     while True:
         logging.info("Step {} : play {} {}".format(i, color, vertex))
-
         (client, addr) = clients[i % 2]
         if pass_cnt == 2:
             data = handle_client(client, addr, b"showboard\n")
