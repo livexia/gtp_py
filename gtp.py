@@ -2,9 +2,10 @@ import argparse
 import socket
 import subprocess
 import time
+from typing import Optional
 
 
-def spawn_gnugo(host: str, port: int) -> int:
+def spawn_gnugo(host: str, port: int) -> subprocess.Popen:
     proc = subprocess.Popen(
         "gnugo --mode gtp --gtp-listen {}:{}".format(host, port),
         shell=True,
@@ -14,7 +15,7 @@ def spawn_gnugo(host: str, port: int) -> int:
 
     print("Spawn gnugo at {}:{} pid: {}".format(host, port, proc.pid))
     time.sleep(2)
-    return proc.pid
+    return proc
 
 
 def connect_to_gtp(host: str, port: int) -> socket.SocketType:
@@ -26,6 +27,21 @@ def connect_to_gtp(host: str, port: int) -> socket.SocketType:
     print("connecting to {} port {}".format(*server_address))
     sock.connect(server_address)
     return sock
+
+
+def send_command(gtp, command: bytes) -> Optional[bytearray]:
+    gtp.send(command)
+
+    data = bytearray()
+
+    while True:
+        if command == b"quit\n":
+            print("quit")
+            raise ConnectionResetError
+        data.extend(gtp.recv(4096))
+        if len(data) == 0 or data[-2:] == b"\n\n":
+            break
+    return data
 
 
 class PortNumber(int):
@@ -60,32 +76,26 @@ def main():
 
     spawn_gnugo(host, port)
 
-    sock = connect_to_gtp(host, port)
+    gtp = connect_to_gtp(host, port)
 
     try:
         while True:
             # Send data
             message = bytes("{}\n".format(input("> ")), "utf-8")
             print("sending {!r}".format(message))
-            sock.send(message)
+            data = send_command(gtp, message)
 
-            data = bytearray()
-
-            while True:
-                if message == b"quit\n":
-                    print("quit")
-                    raise ConnectionResetError
-                data.extend(sock.recv(4096))
-                if len(data) == 0 or data[-2:] == b"\n\n":
-                    break
-            print("received\n {}".format(str(data, "utf-8")))
+            if data is not None:
+                print("received\n {}".format(str(data, "utf-8")))
+            else:
+                raise
 
     except Exception as e:
         print("closing socket because: {!r}".format(e))
-        sock.close()
+        gtp.close()
     except KeyboardInterrupt as e:
         print(e)
-        sock.close()
+        gtp.close()
 
 
 if __name__ == "__main__":
