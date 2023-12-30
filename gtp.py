@@ -116,7 +116,7 @@ def play(clients):
     i = 0
     pass_cnt = 0
 
-    while i < 300:
+    while True:
         # time.sleep(0.1)
         (client, addr) = clients[i % 2]
         i += 1
@@ -146,11 +146,15 @@ def play(clients):
         else:
             print("client {} sends no data".format(client))
             break
-        data = handle_client(client, addr, b"showboard\n")
-        if data is None:
-            break
-        print("received {} bytes\n {}".format(len(data), str(data, "utf-8")))
         if pass_cnt == 2:
+            data = handle_client(client, addr, b"showboard\n")
+            if data is None:
+                break
+            print(str(data, "utf-8"))
+            data = handle_client(client, addr, b"final_score\n")
+            if data is None:
+                break
+            print("score: {}".format(str(data, "utf-8")))
             break
 
 
