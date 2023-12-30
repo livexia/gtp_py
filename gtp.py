@@ -2,6 +2,7 @@ import argparse
 import socket
 import subprocess
 import time
+import logging
 from typing import Optional
 
 
@@ -13,7 +14,7 @@ def spawn_gnugo_server(host: str, port: int) -> subprocess.Popen:
         stdout=subprocess.PIPE,
     )
 
-    print("Spawn gnugo(pid:{}) lsiten at {}:{}".format(proc.pid, host, port))
+    logging.info("Spawn gnugo(pid:{}) lsiten at {}:{}".format(proc.pid, host, port))
     time.sleep(2)
     return proc
 
@@ -26,7 +27,7 @@ def spawn_gnugo_client(host: str, port: int) -> subprocess.Popen:
         stdout=subprocess.PIPE,
     )
 
-    print("Spawn gnugo(pid:{}) connect to {}:{}".format(proc.pid, host, port))
+    logging.info("Spawn gnugo(pid:{}) connect to {}:{}".format(proc.pid, host, port))
     time.sleep(2)
     return proc
 
@@ -37,7 +38,7 @@ def gtp_client(host: str, port: int) -> socket.SocketType:
 
     # Connect the socket to the port where the server is listening
     server_address = (host, port)
-    print("connecting to {} port {}".format(*server_address))
+    logging.info("connecting to {} port {}".format(*server_address))
     sock.connect(server_address)
     return sock
 
@@ -46,7 +47,7 @@ def gtp_server(host: str, port: int):
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 
     address = (host, port)
-    print("listening to {} port {}".format(*address))
+    logging.info("listening to {} port {}".format(*address))
     sock.bind(address)
     sock.listen(1)
     return sock
@@ -59,7 +60,7 @@ def send_command(connection, command: bytes) -> bytearray:
 
     while True:
         if command == b"quit\n":
-            print("quit")
+            logging.info("quit")
             connection.close()
             break
         data.extend(connection.recv(4096))
@@ -75,18 +76,20 @@ def client(host: str, port: int):
         while True:
             # Send data
             message = bytes("{}\n".format(input("> ")), "utf-8")
-            print("sending {!r}".format(message))
+            logging.debug("sending {!r}".format(message))
             data = send_command(gtp, message)
 
             if data:
-                print("received {} bytes\n {}".format(len(data), str(data, "utf-8")))
+                logging.debug(
+                    "received {} bytes\n {}".format(len(data), str(data, "utf-8"))
+                )
             else:
                 raise
 
     except Exception as e:
-        print("closing socket because: {!r}".format(e))
+        logging.error("closing socket because: {!r}".format(e))
     except KeyboardInterrupt as e:
-        print(e)
+        logging.error(e)
     finally:
         gtp.close()
 
@@ -96,13 +99,13 @@ def handle_client(
 ) -> Optional[bytearray]:
     try:
         # Send data
-        print("sending {!r}".format(command))
+        logging.debug("sending {!r}".format(command))
         data = send_command(client, command)
 
         if data:
             return data
     except Exception as e:
-        print("connection form {} ended because {}".format(addr, e))
+        logging.error("connection form {} ended because {}".format(addr, e))
         client.close()
     return None
 
@@ -117,8 +120,20 @@ def play(clients):
     pass_cnt = 0
 
     while True:
-        # time.sleep(0.1)
+        logging.info("Step {} : play {} {}".format(i, color, vertex))
+
         (client, addr) = clients[i % 2]
+        if pass_cnt == 2:
+            data = handle_client(client, addr, b"showboard\n")
+            if data is None:
+                break
+            print(str(data, "utf-8"))
+            data = handle_client(client, addr, b"final_score\n")
+            if data is None:
+                break
+            print("score: {}".format(str(data, "utf-8")))
+            break
+
         i += 1
         if color is None and vertex is None:
             # move first time
@@ -128,7 +143,7 @@ def play(clients):
         else:
             command = bytes("play {} {}\n".format(color, vertex), "utf-8")
             if handle_client(client, addr, command) is None:
-                print("client {} sends no data".format(client))
+                logging.error("client {} sends no data".format(client))
                 break
             if color == "black":
                 command = bytes("genmove w\n", "utf-8")
@@ -144,17 +159,7 @@ def play(clients):
             else:
                 pass_cnt = 0
         else:
-            print("client {} sends no data".format(client))
-            break
-        if pass_cnt == 2:
-            data = handle_client(client, addr, b"showboard\n")
-            if data is None:
-                break
-            print(str(data, "utf-8"))
-            data = handle_client(client, addr, b"final_score\n")
-            if data is None:
-                break
-            print("score: {}".format(str(data, "utf-8")))
+            logging.error("client {} sends no data".format(client))
             break
 
 
@@ -166,7 +171,7 @@ def server(host: str, port: int):
     while len(clients) != 2:
         # Wait for a connection
         client, addr = gtp.accept()
-        print("connection from", addr)
+        logging.info("connection from {}".format(addr))
         clients.append((client, addr))
 
     play(clients)
@@ -203,11 +208,25 @@ def main():
         dest="mode",
         choices=["client", "server"],
         default="server",
+        help="Runing python wrapper as server or client",
+    )
+    parser.add_argument(
+        "-v", dest="verbose", action="count", default=0, help="verbose level"
     )
     args = parser.parse_args()
 
     host = args.host
     port = args.port
+
+    verbose = args.verbose
+
+    LEVELS = [
+        logging.ERROR,
+        logging.INFO,
+        logging.DEBUG,
+    ]
+
+    logging.basicConfig(level=LEVELS[verbose % len(LEVELS)])
 
     if args.mode == "client":
         client(host, port)
