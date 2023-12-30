@@ -4,6 +4,30 @@ import subprocess
 import time
 
 
+def spawn_gnugo(host: str, port: int) -> int:
+    proc = subprocess.Popen(
+        "gnugo --mode gtp --gtp-listen {}:{}".format(host, port),
+        shell=True,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+    )
+
+    print("Spawn gnugo at {}:{} pid: {}".format(host, port, proc.pid))
+    time.sleep(2)
+    return proc.pid
+
+
+def connect_to_gtp(host: str, port: int) -> socket.SocketType:
+    # Create a TCP/IP socket
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+    # Connect the socket to the port where the server is listening
+    server_address = (host, port)
+    print("connecting to {} port {}".format(*server_address))
+    sock.connect(server_address)
+    return sock
+
+
 class PortNumber(int):
     def __init__(self, i):
         self = int(i)
@@ -18,8 +42,8 @@ def main():
     parser.add_argument(
         "-a",
         dest="host",
-        default="127.0.0.1",
-        help="Connect host, default is 127.0.0.1",
+        default=socket.gethostname(),
+        help="Connect host, default is local hostname",
     )
     parser.add_argument(
         "-p",
@@ -33,23 +57,10 @@ def main():
 
     host = args.host
     port = args.port
-    # Spawn gnugo --mode gtp --gtp-listen 127.0.0.1:20231
-    proc = subprocess.Popen(
-        "gnugo --mode gtp --gtp-listen {}:{}".format(host, port),
-        shell=True,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-    )
 
-    time.sleep(2)
+    spawn_gnugo(host, port)
 
-    # Create a TCP/IP socket
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-
-    # Connect the socket to the port where the server is listening
-    server_address = (host, port)
-    print("connecting to {} port {}".format(*server_address))
-    sock.connect(server_address)
+    sock = connect_to_gtp(host, port)
 
     try:
         while True:
