@@ -1,156 +1,143 @@
 import argparse
-import socket
 import subprocess
 import time
 import logging
-from typing import Optional
+import io
 
 
-def spawn_gnugo_server(host: str, port: int) -> subprocess.Popen:
-    proc = subprocess.Popen(
-        "gnugo --mode gtp --gtp-listen {}:{}".format(host, port),
-        shell=True,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-    )
+def append_newline(func):
+    def wrapper(*args, **kwargs):
+        args = list(args)
+        for i, v in enumerate(args):
+            if type(v) is str and not v.endswith("\n"):
+                args[i] = v + "\n"
+        for k, v in kwargs:
+            if type(v) is str and not v.endswith("\n"):
+                kwargs[k] = v + "\n"
+        func(*args, **kwargs)
 
-    logging.info("Spawn gnugo(pid:{}) lsiten at {}:{}".format(proc.pid, host, port))
-    time.sleep(2)
-    return proc
-
-
-def spawn_gnugo_client(host: str, port: int) -> subprocess.Popen:
-    proc = subprocess.Popen(
-        "gnugo --mode gtp --gtp-connect {}:{}".format(host, port),
-        shell=True,
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-    )
-
-    logging.info("Spawn gnugo(pid:{}) connect to {}:{}".format(proc.pid, host, port))
-    time.sleep(2)
-    return proc
+    return wrapper
 
 
-def gtp_client(host: str, port: int) -> socket.SocketType:
-    # Create a TCP/IP socket
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-
-    # Connect the socket to the port where the server is listening
-    server_address = (host, port)
-    logging.info("connecting to {} port {}".format(*server_address))
-    sock.connect(server_address)
-    return sock
-
-
-def gtp_server(host: str, port: int):
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-
-    address = (host, port)
-    logging.info("listening to {} port {}".format(*address))
-    sock.bind(address)
-    sock.listen(1)
-    return sock
-
-
-def send_command(connection, command: bytes) -> bytearray:
-    connection.send(command)
-
-    data = bytearray()
-
-    while True:
-        if command == b"quit\n":
-            logging.info("quit")
-            connection.close()
-            break
-        data.extend(connection.recv(4096))
-        if len(data) == 0 or data[-2:] == b"\n\n":
-            break
-    return data
-
-
-def client(host: str, port: int):
-    spawn_gnugo_server(host, port)
-    gtp = gtp_client(host, port)
-    try:
-        while True:
-            # Send data
-            message = bytes("{}\n".format(input("> ")), "utf-8")
-            logging.debug("sending {!r}".format(message))
-            data = send_command(gtp, message)
-
-            if data:
-                logging.debug(
-                    "received {} bytes\n {}".format(len(data), str(data, "utf-8"))
+class Engine:
+    def __init__(self, config=[]):
+        self.proc = spawn_gnugo()
+        self.stdin = io.TextIOWrapper(
+            self.proc.stdin,
+            encoding="utf-8",
+            line_buffering=True,  # send data on newline
+        )
+        self.stdout = io.TextIOWrapper(
+            self.proc.stdout,
+            encoding="utf-8",
+        )
+        if config:
+            for c in config:
+                self.send(c)
+                logging.info(
+                    "config {!r} with command {}: {}".format(
+                        self, c, self.read().rstrip()
+                    )
                 )
-            else:
-                raise
 
-    except Exception as e:
-        logging.error("closing socket because: {!r}".format(e))
-    except KeyboardInterrupt as e:
-        logging.error(e)
-    finally:
-        gtp.close()
+    def __repr__(self) -> str:
+        return "Engine pid: {}".format(self.proc.pid)
 
+    @append_newline
+    def send(self, command: str):
+        self.stdin.write(command)
+        if command == "quit\n":
+            self.close()
 
-def handle_client(
-    client: socket.SocketType, addr: str, command: bytes
-) -> Optional[bytearray]:
-    try:
-        # Send data
-        logging.debug("sending {!r}".format(command))
-        data = send_command(client, command)
+    def read(self) -> str:
+        data = ""
+        while True:
+            temp = self.stdout.readline()
+            if temp == "\n":
+                break
+            data += temp
+        return data
 
-        if data:
-            return data
-    except Exception as e:
-        logging.error("connection form {} ended because {}".format(addr, e))
-        client.close()
-    return None
+    def close(self):
+        self.stdin.close()
+        self.stdout.close()
+        self.proc.kill()
 
 
-def parse_move_result(input: bytearray) -> str:
-    return input.strip(b"= \n\t").decode("utf-8")
+def spawn_gnugo() -> subprocess.Popen:
+    proc = subprocess.Popen(
+        "gnugo --mode gtp",
+        shell=True,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+    logging.info("Spawn gnugo pid:{}".format(proc.pid))
+    time.sleep(0.5)
+    return proc
 
 
-def play(clients):
+def play_with_engine(config):
+    engine = Engine(config)
+    while True:
+        command = input("> ")
+        engine.send(command)
+        if engine.stdin.closed:
+            break
+        print(engine.read())
+
+
+def parse_move_result(input: str) -> str:
+    return input.strip("= \n\t")
+
+
+def two_engine_play(engine1, engine2):
     color, vertex = None, None
     i = 0
     pass_cnt = 0
+    engines = [engine1, engine2]
 
     while True:
-        logging.info("Step {} : play {} {}".format(i, color, vertex))
-        (client, addr) = clients[i % 2]
+        logging.debug(
+            "{!r} play hand {}: {} {}".format(engines[(i - 1) % 2], i, color, vertex)
+        )
+        engine = engines[i % 2]
         if pass_cnt == 2:
-            data = handle_client(client, addr, b"showboard\n")
-            if data is None:
+            engine.send("showboard")
+            data = engine.read()
+            if not data:
                 break
-            print(str(data, "utf-8"))
-            data = handle_client(client, addr, b"final_score\n")
-            if data is None:
+            print(data)
+            engine.send("final_score")
+            data = engine.read()
+            if not data:
                 break
-            print("score: {}".format(str(data, "utf-8")))
+            print("score: {}".format(data))
             break
 
         i += 1
         if color is None and vertex is None:
             # move first time
-            command = bytes("genmove b\n", "utf-8")
+            command = "genmove b"
             color = "black"
-            move_result = handle_client(client, addr, command)
+            engine.send(command)
+            move_result = engine.read()
         else:
-            command = bytes("play {} {}\n".format(color, vertex), "utf-8")
-            if handle_client(client, addr, command) is None:
-                logging.error("client {} sends no data".format(client))
+            command = "play {} {}".format(color, vertex)
+            engine.send(command)
+            move_result = engine.read()
+            if not move_result:
+                logging.error("engine {} sends no data".format(engine))
                 break
             if color == "black":
-                command = bytes("genmove w\n", "utf-8")
+                command = "genmove w"
                 color = "white"
             else:
-                command = bytes("genmove b\n", "utf-8")
+                command = "genmove b"
                 color = "black"
-            move_result = handle_client(client, addr, command)
+            engine.send(command)
+            move_result = engine.read()
         if move_result is not None:
             vertex = parse_move_result(move_result)
             if vertex == "PASS":
@@ -158,79 +145,50 @@ def play(clients):
             else:
                 pass_cnt = 0
         else:
-            logging.error("client {} sends no data".format(client))
+            logging.error("client {} sends no data".format(engine))
             break
-
-
-def server(host: str, port: int):
-    gtp = gtp_server(host, port)
-    spawn_gnugo_client(host, port)
-    spawn_gnugo_client(host, port)
-    clients = []
-    while len(clients) != 2:
-        # Wait for a connection
-        client, addr = gtp.accept()
-        logging.info("connection from {}".format(addr))
-        clients.append((client, addr))
-
-    play(clients)
-    gtp.close()
-
-
-class PortNumber(int):
-    def __init__(self, i):
-        self = int(i)
-        if self not in range(1, 65536):
-            raise argparse.ArgumentTypeError(
-                "port number must be integers between 0 and 65535"
-            )
 
 
 def main():
     parser = argparse.ArgumentParser(description="A wrapper for Go Text Protocol")
     parser.add_argument(
-        "-a",
-        dest="host",
-        default=socket.gethostname(),
-        help="Connect host, default is local hostname",
+        "-c",
+        dest="count",
+        choices=[1, 2],
+        type=int,
+        help="GTP engine count: 1 play with engine, 2 engine play with each other",
     )
     parser.add_argument(
-        "-p",
-        dest="port",
-        type=PortNumber,
-        required=True,
-        help="Connect port",
-        metavar="{1..65535}",
+        "--boardsize",
+        dest="boardsize",
+        type=int,
+        choices=range(9, 20),
+        default=19,
+        help="size of board",
     )
     parser.add_argument(
-        "-m",
-        dest="mode",
-        choices=["client", "server"],
-        default="server",
-        help="Runing python wrapper as server or client",
-    )
-    parser.add_argument(
-        "-v", dest="verbose", action="count", default=0, help="verbose level"
+        "-v", dest="verbose", action="store_true", default=False, help="verbose output"
     )
     args = parser.parse_args()
 
-    host = args.host
-    port = args.port
-
     verbose = args.verbose
 
-    LEVELS = [
-        logging.ERROR,
-        logging.INFO,
-        logging.DEBUG,
-    ]
+    if not verbose:
+        level = logging.INFO
+    else:
+        level = logging.DEBUG
 
-    logging.basicConfig(level=LEVELS[verbose % len(LEVELS)])
+    logging.basicConfig(level=level)
 
-    if args.mode == "client":
-        client(host, port)
-    elif args.mode == "server":
-        server(host, port)
+    engine_count = args.count
+    config = ["boardsize {}".format(args.boardsize)]
+
+    if engine_count == 1:
+        play_with_engine(config)
+    elif engine_count == 2:
+        engine1 = Engine(config)
+        engine2 = Engine(config)
+        two_engine_play(engine1, engine2)
 
 
 if __name__ == "__main__":
