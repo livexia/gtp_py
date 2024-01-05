@@ -3,6 +3,7 @@ import subprocess
 import time
 import logging
 import io
+import random
 
 
 def append_newline(func):
@@ -14,7 +15,7 @@ def append_newline(func):
         for k, v in kwargs:
             if type(v) is str and not v.endswith("\n"):
                 kwargs[k] = v + "\n"
-        func(*args, **kwargs)
+        return func(*args, **kwargs)
 
     return wrapper
 
@@ -33,10 +34,9 @@ class Engine:
         )
         if config:
             for c in config:
-                self.send(c)
                 logging.info(
                     "config {!r} with command {}: {}".format(
-                        self, c, self.read().rstrip()
+                        self, c, self.send(c).rstrip()
                     )
                 )
 
@@ -44,12 +44,15 @@ class Engine:
         return "Engine pid: {}".format(self.proc.pid)
 
     @append_newline
-    def send(self, command: str):
+    def send(self, command: str) -> str:
         self.stdin.write(command)
         if command == "quit\n":
             self.close()
+            return ""
+        else:
+            return self._read()
 
-    def read(self) -> str:
+    def _read(self) -> str:
         data = ""
         while True:
             temp = self.stdout.readline()
@@ -62,6 +65,9 @@ class Engine:
         self.stdin.close()
         self.stdout.close()
         self.proc.kill()
+
+    def board(self) -> str:
+        return self.send("showboard")
 
 
 def spawn_gnugo() -> subprocess.Popen:
@@ -80,12 +86,27 @@ def spawn_gnugo() -> subprocess.Popen:
 
 def play_with_engine(config):
     engine = Engine(config)
+    colors = ["black", "white"]
+    temp = random.randint(0, 1)
+    player_color = colors[temp]
+    engine_color = colors[1 - temp]
+    engine_cmd = "genmove {}".format(engine_color)
+    print("player play {}, engine play {}".format(player_color, engine_color))
+
     while True:
         command = input("> ")
-        engine.send(command)
+        data = engine.send(command)
         if engine.stdin.closed:
             break
-        print(engine.read())
+        if command.strip().startswith("play {}".format(player_color[0])):
+            print(
+                "engine play {} {}".format(
+                    engine_color, parse_move_result(engine.send(engine_cmd))
+                )
+            )
+            print(engine.board())
+        else:
+            print(data)
 
 
 def parse_move_result(input: str) -> str:
@@ -104,13 +125,8 @@ def two_engine_play(engine1, engine2):
         )
         engine = engines[i % 2]
         if pass_cnt == 2:
-            engine.send("showboard")
-            data = engine.read()
-            if not data:
-                break
-            print(data)
-            engine.send("final_score")
-            data = engine.read()
+            print(engine.board())
+            data = engine.send("final_score")
             if not data:
                 break
             print("score: {}".format(data))
@@ -121,12 +137,10 @@ def two_engine_play(engine1, engine2):
             # move first time
             command = "genmove b"
             color = "black"
-            engine.send(command)
-            move_result = engine.read()
+            move_result = engine.send(command)
         else:
             command = "play {} {}".format(color, vertex)
-            engine.send(command)
-            move_result = engine.read()
+            move_result = engine.send(command)
             if not move_result:
                 logging.error("engine {} sends no data".format(engine))
                 break
@@ -136,8 +150,7 @@ def two_engine_play(engine1, engine2):
             else:
                 command = "genmove b"
                 color = "black"
-            engine.send(command)
-            move_result = engine.read()
+            move_result = engine.send(command)
         if move_result is not None:
             vertex = parse_move_result(move_result)
             if vertex == "PASS":
